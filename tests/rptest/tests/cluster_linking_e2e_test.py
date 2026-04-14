@@ -4479,3 +4479,140 @@ class ShadowLinkingCloudTopicReplicationTests(ShadowLinkPreAllocTestBase):
 
         with self.producer_consumer(topic=topic.name, msg_size=128, msg_cnt=10000):
             self.verify()
+
+
+class ShadowLinkingCloudTopicStorageModeOverrideTests(ShadowLinkPreAllocTestBase):
+    """
+    Tests that a shadow link with shadow_topic_storage_mode=CLOUD creates
+    cloud topic shadows even when the source topic uses local storage.
+    """
+
+    def __init__(self, test_context: TestContext, *args: Any, **kwargs: Any):
+        si_settings = SISettings(
+            test_context,
+            cloud_storage_max_connections=10,
+            cloud_storage_enable_remote_read=False,
+            cloud_storage_enable_remote_write=False,
+            fast_uploads=True,
+        )
+
+        super().__init__(
+            test_context,
+            # Target cluster: cloud topics enabled (it will host cloud shadows)
+            si_settings=si_settings,
+            extra_rp_conf={
+                CLOUD_TOPICS_CONFIG_STR: True,
+                "enable_cluster_metadata_upload_loop": False,
+            },
+            # Source cluster: no cloud topics needed, just regular Redpanda
+            secondary_cluster_args=SecondaryClusterArgs(
+                extra_rp_conf={
+                    "enable_shadow_linking": True,
+                },
+            ),
+            *args,
+            **kwargs,
+        )
+
+    def create_link_with_storage_mode_override(
+        self,
+        link_name: str,
+        storage_mode: shadow_link_pb2.ShadowTopicStorageMode.ValueType,
+    ) -> shadow_link_pb2.ShadowLink:
+        """Create a shadow link with shadow_topic_storage_mode override."""
+        req = self.create_default_link_request(link_name=link_name)
+        req.shadow_link.configurations.topic_metadata_sync_options.shadow_topic_storage_mode = storage_mode
+        return self.create_link_with_request(req=req)
+
+    @cluster(num_nodes=6)
+    def test_storage_mode_override_creates_cloud_shadow(self):
+        """
+        When a shadow link has shadow_topic_storage_mode=CLOUD, all
+        shadow topics should be created with storage_mode=cloud,
+        regardless of the source topic's storage mode.
+        """
+        topic = TopicSpec(
+            name="override-test",
+            partition_count=3,
+            replication_factor=1,
+        )
+
+        # Create a regular (local storage mode) topic on the source
+        source_rpk = RpkTool(self.source_cluster.service)
+        source_rpk.create_topic(
+            topic=topic.name,
+            partitions=topic.partition_count,
+            replicas=topic.replication_factor,
+        )
+
+        # Verify source topic does NOT have cloud storage mode
+        source_configs = source_rpk.describe_topic_configs(topic.name)
+        assert (
+            source_configs[TopicSpec.PROPERTY_STORAGE_MODE][0]
+            != TopicSpec.STORAGE_MODE_CLOUD
+        ), (
+            f"Source topic should not be cloud but got: "
+            f"{source_configs[TopicSpec.PROPERTY_STORAGE_MODE]}"
+        )
+
+        # Create link with storage mode override = CLOUD
+        self.create_link_with_storage_mode_override(
+            "test-link",
+            shadow_link_pb2.SHADOW_TOPIC_STORAGE_MODE_CLOUD,
+        )
+
+        # Wait for shadow topic to appear on target
+        self.target_cluster.service.wait_until(
+            lambda: self.topic_partitions_exists_in_target(topic),
+            timeout_sec=30,
+            backoff_sec=1,
+            err_msg=f"Topic {topic.name} not found in target cluster",
+        )
+
+        # Verify target topic has cloud storage mode despite source being local
+        target_rpk = RpkTool(self.target_cluster.service)
+        target_configs = target_rpk.describe_topic_configs(topic.name)
+        assert (
+            target_configs[TopicSpec.PROPERTY_STORAGE_MODE][0]
+            == TopicSpec.STORAGE_MODE_CLOUD
+        ), (
+            f"Target topic storage mode: "
+            f"{target_configs[TopicSpec.PROPERTY_STORAGE_MODE]}, "
+            f"expected: {TopicSpec.STORAGE_MODE_CLOUD}"
+        )
+
+    @cluster(num_nodes=7)
+    def test_storage_mode_override_with_data_replication(self):
+        """
+        Verify that data produced to a regular topic on the source cluster
+        is replicated to a cloud topic shadow on the target cluster when
+        the link has shadow_topic_storage_mode=CLOUD.
+        """
+        topic = TopicSpec(
+            name="override-data-test",
+            partition_count=3,
+            replication_factor=1,
+        )
+
+        source_rpk = RpkTool(self.source_cluster.service)
+        source_rpk.create_topic(
+            topic=topic.name,
+            partitions=topic.partition_count,
+            replicas=topic.replication_factor,
+        )
+
+        self.create_link_with_storage_mode_override(
+            "test-link",
+            shadow_link_pb2.SHADOW_TOPIC_STORAGE_MODE_CLOUD,
+        )
+
+        self.target_cluster.service.wait_until(
+            lambda: self.topic_partitions_exists_in_target(topic),
+            timeout_sec=30,
+            backoff_sec=1,
+            err_msg=f"Topic {topic.name} not found in target cluster",
+        )
+
+        # Produce and verify data replicates through the cloud topics pipeline
+        with self.producer_consumer(topic=topic.name, msg_size=128, msg_cnt=10000):
+            self.verify()
