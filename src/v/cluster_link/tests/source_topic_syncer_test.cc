@@ -695,4 +695,69 @@ TEST_F_CORO(source_topic_syncer_test, cloud_topic_mirrored) {
     });
 }
 
+TEST_F_CORO(
+  source_topic_syncer_test, storage_mode_override_creates_cloud_topic) {
+    // Source topic is a regular (local) topic — no special storage mode
+    auto topic = ::model::topic("regular-topic");
+    fixture()->get_cluster_mock().add_topic(
+      topic, 3, 3, kafka::topic_authorized_operations(0x508));
+
+    // Create link with storage_mode_override = cloud
+    auto md = get_default_metadata();
+    md.configuration.topic_metadata_mirroring_cfg.storage_mode_override
+      = ::model::redpanda_storage_mode::cloud;
+    co_await fixture()->upsert_link(std::move(md));
+
+    // Topic should be mirrored
+    RPTEST_REQUIRE_EVENTUALLY_CORO(5s, [this, &topic] {
+        auto link_metadata = fixture()->find_link_by_name(
+          model::name_t("test_link"));
+        return link_metadata->state.mirror_topics.contains(topic);
+    });
+
+    // The mirrored topic's configs should have storage_mode=cloud
+    auto link_metadata = fixture()->find_link_by_name(
+      model::name_t("test_link"));
+    const auto& mirror = link_metadata->state.mirror_topics.at(topic);
+    auto it = mirror.topic_configs.find("redpanda.storage.mode");
+    ASSERT_TRUE_CORO(it != mirror.topic_configs.end())
+      << "storage mode should be in topic configs";
+    EXPECT_EQ(it->second, "cloud");
+}
+
+TEST_F_CORO(
+  source_topic_syncer_test,
+  storage_mode_override_overrides_source_storage_mode) {
+    // Source topic explicitly has storage_mode=local
+    auto topic = ::model::topic("local-topic");
+    fixture()->get_cluster_mock().add_topic(
+      topic, 3, 3, kafka::topic_authorized_operations(0x508));
+
+    ::cluster::topic_properties local_props;
+    local_props.storage_mode = ::model::redpanda_storage_mode::local;
+    fixture()->get_cluster_mock().set_topic_properties(
+      topic, std::move(local_props));
+
+    // Create link with storage_mode_override = cloud
+    auto md = get_default_metadata();
+    md.configuration.topic_metadata_mirroring_cfg.storage_mode_override
+      = ::model::redpanda_storage_mode::cloud;
+    co_await fixture()->upsert_link(std::move(md));
+
+    RPTEST_REQUIRE_EVENTUALLY_CORO(5s, [this, &topic] {
+        auto link_metadata = fixture()->find_link_by_name(
+          model::name_t("test_link"));
+        return link_metadata->state.mirror_topics.contains(topic);
+    });
+
+    // Even though source has local, mirror should have cloud due to override
+    auto link_metadata = fixture()->find_link_by_name(
+      model::name_t("test_link"));
+    const auto& mirror = link_metadata->state.mirror_topics.at(topic);
+    auto it = mirror.topic_configs.find("redpanda.storage.mode");
+    ASSERT_TRUE_CORO(it != mirror.topic_configs.end())
+      << "storage mode should be in topic configs";
+    EXPECT_EQ(it->second, "cloud");
+}
+
 } // namespace cluster_link::tests
