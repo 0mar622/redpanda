@@ -455,7 +455,7 @@ struct resource_name_filter_pattern
 struct topic_metadata_mirroring_config
   : serde::envelope<
       topic_metadata_mirroring_config,
-      serde::version<0>,
+      serde::version<1>,
       serde::compat_version<0>> {
     /// Flag to indicate if the task is enabled or not
     enabled_t is_enabled{enabled_t::yes};
@@ -476,6 +476,16 @@ struct topic_metadata_mirroring_config
     /// earliest is -2 and latest is -1.  Defaults to earliest_offset
 
     std::optional<::model::timestamp> starting_offset;
+
+    /// Override storage mode for all shadow topics created via this link.
+    /// When set, the syncer injects this value into the topic config map
+    /// and suppresses syncing storage_mode from the source.
+    // NOTE: If more per-link property overrides are needed in the future,
+    // consider introducing a config_overrides field on mirror_topic_metadata
+    // that takes precedence over synced topic_configs during creation and
+    // updates. See docs/plans/2026-04-13-cloud-topics-shadow-linking-design.md.
+    std::optional<::model::redpanda_storage_mode> storage_mode_override;
+
     properties_set get_topic_properties_to_mirror() const;
 
     ss::lowres_clock::duration get_task_interval() const {
@@ -497,7 +507,8 @@ struct topic_metadata_mirroring_config
           topic_name_filters,
           topic_properties_to_mirror,
           exclude_default,
-          starting_offset);
+          starting_offset,
+          storage_mode_override);
     }
 
     topic_metadata_mirroring_config copy() const;

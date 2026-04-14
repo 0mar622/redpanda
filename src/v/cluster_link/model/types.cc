@@ -159,6 +159,12 @@ topic_metadata_mirroring_config::get_topic_properties_to_mirror() const {
     props.insert(
       topic_properties_to_mirror.begin(), topic_properties_to_mirror.end());
 
+    // When a storage mode override is active, don't request or sync
+    // the source's storage mode — the override takes precedence.
+    if (storage_mode_override.has_value()) {
+        props.erase(ss::sstring(kafka::topic_property_redpanda_storage_mode));
+    }
+
     return props;
 }
 
@@ -174,6 +180,7 @@ topic_metadata_mirroring_config topic_metadata_mirroring_config::copy() const {
     copy.topic_properties_to_mirror = topic_properties_to_mirror;
     copy.exclude_default = exclude_default;
     copy.starting_offset = starting_offset;
+    copy.storage_mode_override = storage_mode_override;
 
     return copy;
 }
