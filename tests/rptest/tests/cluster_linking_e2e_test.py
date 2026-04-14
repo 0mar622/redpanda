@@ -4616,3 +4616,73 @@ class ShadowLinkingCloudTopicStorageModeOverrideTests(ShadowLinkPreAllocTestBase
         # Produce and verify data replicates through the cloud topics pipeline
         with self.producer_consumer(topic=topic.name, msg_size=128, msg_cnt=10000):
             self.verify()
+
+    @cluster(num_nodes=6)
+    def test_failover_promotes_cloud_to_tiered_cloud(self):
+        """
+        After failover, a cloud shadow topic should be automatically
+        promoted to tiered_cloud for low-latency reads/writes on the
+        now-primary cluster.
+        """
+        topic = TopicSpec(
+            name="failover-promote-test",
+            partition_count=1,
+            replication_factor=1,
+        )
+
+        source_rpk = RpkTool(self.source_cluster.service)
+        source_rpk.create_topic(
+            topic=topic.name,
+            partitions=topic.partition_count,
+            replicas=topic.replication_factor,
+        )
+
+        self.create_link_with_storage_mode_override(
+            "test-link",
+            shadow_link_pb2.SHADOW_TOPIC_STORAGE_MODE_CLOUD,
+        )
+
+        # Wait for shadow topic to appear
+        self.target_cluster.service.wait_until(
+            lambda: self.topic_partitions_exists_in_target(topic),
+            timeout_sec=30,
+            backoff_sec=1,
+            err_msg=f"Topic {topic.name} not found in target cluster",
+        )
+
+        # Verify it's cloud before failover
+        target_rpk = RpkTool(self.target_cluster.service)
+        target_configs = target_rpk.describe_topic_configs(topic.name)
+        assert (
+            target_configs[TopicSpec.PROPERTY_STORAGE_MODE][0]
+            == TopicSpec.STORAGE_MODE_CLOUD
+        ), (
+            f"Before failover: expected cloud, got "
+            f"{target_configs[TopicSpec.PROPERTY_STORAGE_MODE]}"
+        )
+
+        # Failover the topic
+        self.failover_link_topic(link_name="test-link", topic=topic.name)
+
+        # Wait for failover to complete
+        self.wait_for_topic_status(
+            link="test-link",
+            topic=topic.name,
+            target_status=shadow_link_pb2.ShadowTopicState.SHADOW_TOPIC_STATE_FAILED_OVER,
+            timeout_sec=60,
+        )
+
+        # Verify storage mode was promoted to tiered_cloud
+        def storage_mode_is_tiered_cloud():
+            configs = target_rpk.describe_topic_configs(topic.name)
+            return (
+                configs[TopicSpec.PROPERTY_STORAGE_MODE][0]
+                == TopicSpec.STORAGE_MODE_TIERED_CLOUD
+            )
+
+        wait_until(
+            storage_mode_is_tiered_cloud,
+            timeout_sec=30,
+            backoff_sec=1,
+            err_msg=("Storage mode was not promoted to tiered_cloud after failover"),
+        )
