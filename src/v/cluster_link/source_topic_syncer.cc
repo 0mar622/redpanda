@@ -414,6 +414,16 @@ void source_topic_syncer::enqueue_create_mirror_topic_commands(
             continue;
         }
 
+        // Apply storage mode override from link configuration
+        if (_config.storage_mode_override.has_value()) {
+            auto mode_str = ss::sstring(
+              ::model::redpanda_storage_mode_to_string(
+                *_config.storage_mode_override));
+            configs->insert_or_assign(
+              ss::sstring(kafka::topic_property_redpanda_storage_mode),
+              std::move(mode_str));
+        }
+
         commands.emplace_back(
           model::add_mirror_topic_cmd{
             .topic = it->first,

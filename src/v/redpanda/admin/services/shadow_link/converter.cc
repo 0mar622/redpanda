@@ -50,6 +50,7 @@ using proto::admin::shadow_link_status;
 using proto::admin::shadow_link_task_status;
 using proto::admin::shadow_topic;
 using proto::admin::shadow_topic_status;
+using proto::admin::shadow_topic_storage_mode;
 using proto::admin::task_state;
 using proto::admin::topic_metadata_sync_options;
 using proto::admin::topic_metadata_sync_options_earliest_offset;
@@ -187,6 +188,19 @@ create_topic_metadata_mirroring_config(
       });
 
     config.is_enabled = cluster_link::model::enabled_t{!options.get_paused()};
+
+    switch (options.get_shadow_topic_storage_mode()) {
+    case shadow_topic_storage_mode::cloud:
+        config.storage_mode_override = model::redpanda_storage_mode::cloud;
+        break;
+    case shadow_topic_storage_mode::tiered_cloud:
+        config.storage_mode_override
+          = model::redpanda_storage_mode::tiered_cloud;
+        break;
+    default:
+        // unspecified — inherit from source (no override)
+        break;
+    }
 
     return config;
 }
@@ -982,6 +996,21 @@ topic_metadata_sync_options create_topic_metadata_sync_options(
 
     options.set_paused(!bool(cfg.is_enabled));
 
+    if (cfg.storage_mode_override.has_value()) {
+        switch (*cfg.storage_mode_override) {
+        case model::redpanda_storage_mode::cloud:
+            options.set_shadow_topic_storage_mode(
+              shadow_topic_storage_mode::cloud);
+            break;
+        case model::redpanda_storage_mode::tiered_cloud:
+            options.set_shadow_topic_storage_mode(
+              shadow_topic_storage_mode::tiered_cloud);
+            break;
+        default:
+            break;
+        }
+    }
+
     return options;
 }
 
@@ -1196,6 +1225,9 @@ void merge_output_only_fields(
   const cluster_link::model::metadata& from,
   cluster_link::model::metadata& to) {
     to.connection.client_id = from.connection.client_id;
+    // storage_mode_override is immutable after link creation
+    to.configuration.topic_metadata_mirroring_cfg.storage_mode_override
+      = from.configuration.topic_metadata_mirroring_cfg.storage_mode_override;
 }
 
 // Used to update any "change on" timestamps, e.g. the "password_set_at" field

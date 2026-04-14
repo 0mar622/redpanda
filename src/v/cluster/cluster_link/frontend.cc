@@ -1099,6 +1099,16 @@ errc frontend::validator::validate_metadata_mirroring_config(
         }
     }
 
+    if (config.storage_mode_override.has_value()) {
+        if (!config::shard_local_cfg().cloud_topics_enabled()) {
+            vlog(
+              cluster::clusterlog.warn,
+              "Cannot create shadow link with storage mode override: "
+              "cloud topics are not enabled");
+            return errc::feature_disabled;
+        }
+    }
+
     return errc::success;
 }
 
