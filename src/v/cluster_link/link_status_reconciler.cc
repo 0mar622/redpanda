@@ -11,8 +11,12 @@
 
 #include "cluster_link/link_status_reconciler.h"
 
+#include "cluster/types.h"
 #include "cluster_link/deps.h"
 #include "cluster_link/logger.h"
+#include "kafka/data/rpc/deps.h"
+#include "model/metadata.h"
+#include "model/namespace.h"
 #include "ssx/future-util.h"
 
 static constexpr auto reconciliation_interval = std::chrono::seconds{1};
@@ -56,7 +60,11 @@ void link_status_reconciler::reconcile() {
             _reconcilers.emplace(
               link_id,
               std::make_unique<per_link_reconciler>(
-                *_link_registry, link_id, _controller_term, _as));
+                *_link_registry,
+                _topic_creator,
+                link_id,
+                _controller_term,
+                _as));
         }
     }
     // find all links that no longer exist and remove their reconcilers
@@ -83,10 +91,12 @@ void link_status_reconciler::reconcile() {
 
 link_status_reconciler::per_link_reconciler::per_link_reconciler(
   link_registry& registry,
+  kafka::data::rpc::topic_creator* topic_creator,
   model::id_t link_id,
   ::model::term_id term,
   ss::abort_source& as)
   : _registry(registry)
+  , _topic_creator(topic_creator)
   , _link_id(link_id)
   , _term(term) {
     _as_sub = as.subscribe([this] noexcept { _as.request_abort(); });
@@ -183,6 +193,46 @@ ss::future<> link_status_reconciler::per_link_reconciler::try_finish_failover(
       _link_id,
       topic,
       model::mirror_topic_status::failed_over);
+
+    co_await maybe_promote_storage_mode(topic);
+}
+
+ss::future<>
+link_status_reconciler::per_link_reconciler::maybe_promote_storage_mode(
+  const ::model::topic& topic) {
+    // After failover, promote cloud topics to tiered_cloud so the
+    // now-primary cluster has low-latency local reads/writes.
+    const auto& md = _registry.find_link_by_id(_link_id);
+    if (!md) {
+        co_return;
+    }
+    const auto& cfg = md->configuration.topic_metadata_mirroring_cfg;
+    if (
+      !cfg.storage_mode_override.has_value()
+      || *cfg.storage_mode_override != ::model::redpanda_storage_mode::cloud) {
+        co_return;
+    }
+    cluster::topic_properties_update update({::model::kafka_namespace, topic});
+    update.properties.storage_mode.op
+      = cluster::incremental_update_operation::set;
+    update.properties.storage_mode.value
+      = ::model::redpanda_storage_mode::tiered_cloud;
+    auto result = co_await _topic_creator->update_topic(std::move(update));
+    if (result != cluster::errc::success) {
+        vlog(
+          cllog.warn,
+          "[{}] Failed to promote storage mode for topic {} to tiered_cloud: "
+          "{}",
+          _link_id,
+          topic,
+          result);
+    } else {
+        vlog(
+          cllog.info,
+          "[{}] Promoted topic {} storage mode from cloud to tiered_cloud",
+          _link_id,
+          topic);
+    }
 }
 
 ss::future<>
