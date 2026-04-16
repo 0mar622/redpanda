@@ -194,7 +194,18 @@ ss::future<> link_status_reconciler::per_link_reconciler::try_finish_failover(
       topic,
       model::mirror_topic_status::failed_over);
 
-    co_await maybe_promote_storage_mode(topic);
+    // try_finish_failover is noexcept; isolate the promotion call so any
+    // exception from update_topic doesn't terminate the process.
+    try {
+        co_await maybe_promote_storage_mode(topic);
+    } catch (...) {
+        vlog(
+          cllog.warn,
+          "[{}] Exception while promoting storage mode for topic {}: {}",
+          _link_id,
+          topic,
+          std::current_exception());
+    }
 }
 
 ss::future<>
