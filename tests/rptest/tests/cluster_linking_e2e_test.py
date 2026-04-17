@@ -4624,6 +4624,12 @@ class ShadowLinkingCloudTopicStorageModeOverrideTests(ShadowLinkPreAllocTestBase
         promoted to tiered_cloud for low-latency reads/writes on the
         now-primary cluster.
         """
+        # tiered_cloud is explicit-only; activate on the target cluster so
+        # the post-failover AlterConfig to tiered_cloud succeeds.
+        self.target_cluster.service.set_feature_active(
+            "tiered_cloud_topics", True, timeout_sec=30
+        )
+
         topic = TopicSpec(
             name="failover-promote-test",
             partition_count=1,
