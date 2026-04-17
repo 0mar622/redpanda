@@ -1225,9 +1225,6 @@ void merge_output_only_fields(
   const cluster_link::model::metadata& from,
   cluster_link::model::metadata& to) {
     to.connection.client_id = from.connection.client_id;
-    // storage_mode_override is immutable after link creation
-    to.configuration.topic_metadata_mirroring_cfg.storage_mode_override
-      = from.configuration.topic_metadata_mirroring_cfg.storage_mode_override;
 }
 
 // Used to update any "change on" timestamps, e.g. the "password_set_at" field
@@ -1362,6 +1359,21 @@ create_update_cluster_link_config_cmd(
     merge_input_only_fields(*current_metadata, current_sl);
     try {
         auto updated_md = shadow_link_to_metadata(std::move(current_sl));
+
+        // storage_mode_override is immutable after link creation. If the
+        // caller tried to change it (either by value or by clearing it),
+        // reject the update explicitly instead of silently ignoring the
+        // requested change.
+        const auto& current_override
+          = current_metadata->configuration.topic_metadata_mirroring_cfg
+              .storage_mode_override;
+        const auto& updated_override
+          = updated_md.configuration.topic_metadata_mirroring_cfg
+              .storage_mode_override;
+        if (current_override != updated_override) {
+            throw std::invalid_argument(
+              "shadow_topic_storage_mode is immutable after link creation");
+        }
 
         merge_output_only_fields(*current_metadata, updated_md);
         update_timestamps(*current_metadata, updated_md);
