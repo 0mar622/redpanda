@@ -230,10 +230,14 @@ link_status_reconciler::per_link_reconciler::maybe_promote_storage_mode(
       = ::model::redpanda_storage_mode::tiered_cloud;
     auto result = co_await _topic_creator->update_topic(std::move(update));
     if (result != cluster::errc::success) {
+        // Log at error level: promotion is fire-and-forget after failover, so
+        // a failure here leaves the topic stuck in cloud mode indefinitely.
+        // Operator intervention is needed (e.g., ensure tiered_cloud_topics
+        // feature is active, then run AlterConfig manually).
         vlog(
-          cllog.warn,
+          cllog.error,
           "[{}] Failed to promote storage mode for topic {} to tiered_cloud: "
-          "{}",
+          "{}. Manual AlterConfig may be required.",
           _link_id,
           topic,
           result);
