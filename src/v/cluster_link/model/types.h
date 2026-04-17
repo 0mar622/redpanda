@@ -481,9 +481,9 @@ struct topic_metadata_mirroring_config
     /// When set, the syncer injects this value into the topic config map
     /// and suppresses syncing storage_mode from the source.
     // NOTE: If more per-link property overrides are needed in the future,
-    // consider introducing a config_overrides field on mirror_topic_metadata
-    // that takes precedence over synced topic_configs during creation and
-    // updates. See docs/plans/2026-04-13-cloud-topics-shadow-linking-design.md.
+    // consider generalizing this into a config_overrides map on
+    // mirror_topic_metadata that takes precedence over synced topic_configs
+    // during creation and updates.
     std::optional<::model::redpanda_storage_mode> storage_mode_override;
 
     properties_set get_topic_properties_to_mirror() const;
