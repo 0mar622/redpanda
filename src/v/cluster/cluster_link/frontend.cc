@@ -1100,6 +1100,21 @@ errc frontend::validator::validate_metadata_mirroring_config(
     }
 
     if (config.storage_mode_override.has_value()) {
+        // The proto layer only accepts UNSPECIFIED/CLOUD/TIERED_CLOUD, but
+        // the internal enum has more values (local, tiered, unset) that
+        // could reach us through serde deserialization of stale or
+        // corrupted data. Be defensive.
+        auto mode = *config.storage_mode_override;
+        if (
+          mode != ::model::redpanda_storage_mode::cloud
+          && mode != ::model::redpanda_storage_mode::tiered_cloud) {
+            vlog(
+              cluster::clusterlog.warn,
+              "Invalid storage mode override {}: only cloud and tiered_cloud "
+              "are supported",
+              mode);
+            return errc::invalid_create;
+        }
         if (!config::shard_local_cfg().cloud_topics_enabled()) {
             vlog(
               cluster::clusterlog.warn,
