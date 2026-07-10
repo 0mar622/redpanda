@@ -551,24 +551,7 @@ struct record_batch_header
     // unlike record_count.
     int32_t record_count{0};
 
-    auto serde_fields() {
-        return std::tie(
-          header_crc,
-          size_bytes,
-          base_offset,
-          type,
-          crc,
-          attrs,
-          last_offset_delta,
-          first_timestamp,
-          max_timestamp,
-          producer_id,
-          producer_epoch,
-          base_sequence,
-          record_count,
-          ctx);
-    }
-
+    void serde_write(iobuf&) const;
     static record_batch_header
     serde_direct_read(iobuf_parser&, const serde::header&);
 

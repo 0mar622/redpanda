@@ -18,6 +18,40 @@
 
 class RecordBatchTest : public ::testing::Test {};
 
+namespace {
+
+struct fieldwise_record_batch_header
+  : serde::envelope<
+      fieldwise_record_batch_header,
+      serde::version<0>,
+      serde::compat_version<0>> {
+    explicit fieldwise_record_batch_header(
+      const model::record_batch_header& header)
+      : header(header) {}
+
+    auto serde_fields() {
+        return std::tie(
+          header.header_crc,
+          header.size_bytes,
+          header.base_offset,
+          header.type,
+          header.crc,
+          header.attrs,
+          header.last_offset_delta,
+          header.first_timestamp,
+          header.max_timestamp,
+          header.producer_id,
+          header.producer_epoch,
+          header.base_sequence,
+          header.record_count,
+          header.ctx);
+    }
+
+    model::record_batch_header header;
+};
+
+} // namespace
+
 class RecordBatchAttributesTest
   : public ::testing::TestWithParam<
       std::tuple<model::compression, model::timestamp_type>> {};
@@ -69,6 +103,17 @@ TEST_F(RecordBatchTest, SetMaxTimestamp) {
       model::timestamp(batch.header().max_timestamp() - 1));
     EXPECT_EQ(crc, batch.header().crc);
     EXPECT_EQ(hdr_crc, batch.header().header_crc);
+}
+
+TEST_F(RecordBatchTest, SerdeHeaderEncodingMatchesFieldwiseLayout) {
+    const auto batch = model::test::make_random_batch(
+      model::offset(123), 10, true);
+
+    auto expected = serde::to_iobuf(
+      fieldwise_record_batch_header(batch.header()));
+    auto actual = serde::to_iobuf(batch.header());
+
+    EXPECT_EQ(actual, expected);
 }
 
 TEST_F(RecordBatchTest, Iterator) {

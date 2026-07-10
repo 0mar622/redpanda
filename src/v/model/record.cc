@@ -93,6 +93,33 @@ fmt::iterator tx_range::format_to(fmt::iterator it) const {
     return fmt::format_to(it, "pid: {}, range: [{}, {}]", pid, first, last);
 }
 
+void record_batch_header::serde_write(iobuf& out) const {
+    std::array<char, record_batch_header_serde_fields_size> encoded;
+    char* cursor = encoded.data();
+    auto write_le = [&cursor](auto value) {
+        const auto little_endian = ss::cpu_to_le(value);
+        std::memcpy(cursor, &little_endian, sizeof(little_endian));
+        cursor += sizeof(little_endian);
+    };
+
+    write_le(header_crc);
+    write_le(size_bytes);
+    write_le(base_offset());
+    write_le(static_cast<serde::serde_enum_serialized_t>(type));
+    write_le(crc);
+    write_le(static_cast<uint64_t>(static_cast<uint16_t>(attrs.value())));
+    write_le(last_offset_delta);
+    write_le(first_timestamp.value());
+    write_le(max_timestamp.value());
+    write_le(producer_id);
+    write_le(producer_epoch);
+    write_le(base_sequence);
+    write_le(record_count);
+
+    out.append(encoded.data(), encoded.size());
+    serde::write(out, ctx);
+}
+
 record_batch_header record_batch_header::serde_direct_read(
   iobuf_parser& in, const serde::header& envelope) {
     record_batch_header header;
