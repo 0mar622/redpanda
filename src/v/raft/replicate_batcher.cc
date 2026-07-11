@@ -190,22 +190,31 @@ replicate_batcher::do_cache_with_backpressure(
      * When batch size exceed available semaphore units we just acquire all of
      * them to be able to continue.
      */
-    ssx::semaphore_units u;
-    if (opts.timeout) {
-        u = co_await ss::get_units(
-          _max_batch_size_sem,
-          std::min(bytes, _max_batch_size),
-          ssx::semaphore::clock::now() + opts.timeout.value());
-    } else {
-        u = co_await ss::get_units(
-          _max_batch_size_sem, std::min(bytes, _max_batch_size));
+    const auto requested_units = std::min(bytes, _max_batch_size);
+    if (auto u = ss::try_get_units(_max_batch_size_sem, requested_units); u) {
+        auto i = ss::make_lw_shared<item>(
+          record_count, std::move(batches), std::move(*u), opts);
+        _item_cache.emplace_back(i);
+        return ss::make_ready_future<item_ptr>(std::move(i));
     }
 
-    auto i = ss::make_lw_shared<item>(
-      record_count, std::move(batches), std::move(u), opts);
+    auto cache_item = [this, record_count, batches = std::move(batches), opts](
+                        ssx::semaphore_units u) mutable {
+        auto i = ss::make_lw_shared<item>(
+          record_count, std::move(batches), std::move(u), opts);
+        _item_cache.emplace_back(i);
+        return i;
+    };
 
-    _item_cache.emplace_back(i);
-    co_return i;
+    if (opts.timeout) {
+        return ss::get_units(
+                 _max_batch_size_sem,
+                 requested_units,
+                 ssx::semaphore::clock::now() + opts.timeout.value())
+          .then(std::move(cache_item));
+    }
+    return ss::get_units(_max_batch_size_sem, requested_units)
+      .then(std::move(cache_item));
 }
 
 ss::future<> replicate_batcher::flush(
